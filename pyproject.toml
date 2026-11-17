@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cognospay-engine"
+version = "0.1.0"
+description = "Safety-first M-Pesa (Safaricom Daraja) payment engine: STK push, payment links, verified callbacks, claim-first B2B payouts, reconciliation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["SQLAlchemy>=2.0", "requests>=2.31"]
+keywords = ["mpesa", "daraja", "safaricom", "payments", "kenya", "stk-push"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Office/Business :: Financial",
+]
+
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.110"]
+demo = ["flet>=0.86,<0.87", "msgpack"]
+dev = ["pytest>=8", "fastapi>=0.110", "httpx>=0.27", "ruff>=0.5", "build", "flet>=0.86,<0.87", "msgpack"]
+
+[project.scripts]
+cognospay-engine = "cognospay_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501", "B008"]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E701", "E702", "E741", "F811", "I001"]

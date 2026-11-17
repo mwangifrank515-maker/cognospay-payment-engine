@@ -1,0 +1,2 @@
+[console_scripts]
+cognospay-engine = cognospay_engine.cli:main

@@ -1,0 +1,177 @@
+# cognospay-engine
+
+A **safety-first M-Pesa (Safaricom Daraja) payment engine** for Python: STK push collection, payment
+links, verified callbacks, claim-first B2B payouts and a reconciliation job. Extracted from
+[CognosPay](#origin), where it handles real merchant money.
+
+It is a library, not a service: framework-agnostic, SQLAlchemy for storage, a FastAPI adapter included.
+You keep your own users, merchants, auth and UI; the engine owns the part that must never lose or
+duplicate money.
+
+```
+customer ──STK push──▶ Safaricom ──callback──▶ engine ──verify──▶ SUCCESS ──hook──▶ your app
+                                                         │
+                                                         └──claim-first B2B──▶ merchant till/paybill
+                         reconciler (every few min) closes every gap the happy path can leave
+```
+
+## Why this exists
+
+Daraja's happy path is easy. The engine is the other 90%: what happens when each arrow fails.
+
+| Failure | What the engine does |
+|---|---|
+| Forged or replayed callback | Never trusted alone: a claimed SUCCESS is cross-checked with Safaricom's STK query **and** the amount. Callback URL carries a secret, compared in constant time and redacted from logs. |
+| Wrong / missing amount | Payment is flagged `FAILED` for a human and an alert is raised; it is never credited. |
+| STK request times out | Marked `unconfirmed`, **not** failed: the customer may still pay. A later SUCCESS callback is matched back to it by phone + amount. |
+| Callback never arrives | Reconciler asks Safaricom and settles the payment. |
+| Callback and reconciler race | Status moves through a guarded `UPDATE … WHERE status = …`; exactly one wins. Your hook fires once. |
+| Crash between "paid" and "payout" | Reconciler finds `SUCCESS` payments with no payout row and creates it. |
+| Two workers try to pay the same merchant | The payout row is inserted **first** under a UNIQUE key; only the insert's winner may call B2B. |
+| B2B call times out | Payout becomes *ambiguous*: **never auto-retried** (money may have moved); a human is alerted. |
+| B2B result beats our bookkeeping | Every raw callback is stored in an inbox and replayed. |
+| Failure callback that was wrong | Re-checked at 10 min, 2 h, 24 h; recovered and alerted if Safaricom says it succeeded. |
+| Link double-spend | Single-use links are claimed atomically; a rejected push gives the use back. |
+| STK spam to one phone | Per-phone throttle that treats `0712…`, `254712…`, `+254712…` as one number. |
+
+## Install
+
+```bash
+pip install "cognospay-engine[fastapi]"        # from PyPI, once published
+pip install "git+https://github.com/<you>/cognospay-engine.git@v0.1.0"   # until then
+```
+
+Python 3.10+, SQLAlchemy 2.x. Tested on SQLite; designed for PostgreSQL (see [Limitations](#limitations)).
+
+## Quickstart
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from cognospay_engine import (Base, DarajaClient, DarajaConfig, Hooks, PaymentEngine, PayoutRoute)
+
+db = create_engine("postgresql+psycopg2://...")
+Base.metadata.create_all(db)                      # dev only; use Alembic with Base.metadata in production
+SessionLocal = sessionmaker(bind=db)
+
+engine = PaymentEngine(
+    DarajaClient(DarajaConfig.from_env()),        # reads MPESA_CONSUMER_KEY, MPESA_PASSKEY, ... (see below)
+    payout_resolver=lambda session, merchant_id: PayoutRoute("till", "555111", fee_fraction=0.02),
+    hooks=Hooks(on_payment_succeeded=lambda session, payment: mark_order_paid(payment.reference)),
+)
+
+with SessionLocal() as session:
+    link = engine.create_link(session, merchant_id=1, amount=1000, description="Order #42")
+    engine.pay_link(session, link["link_id"], phone="0712345678")     # STK push to the customer
+```
+
+Mount the callback endpoints (FastAPI shown; any framework works, see [Other frameworks](#other-frameworks)):
+
+```python
+from cognospay_engine.contrib.fastapi import create_callback_router, register_error_handlers
+app.include_router(create_callback_router(engine, get_db))   # POST /callback/{stk,b2b,b2b-timeout}/{secret}
+register_error_handlers(app)
+```
+
+Run the reconciler every few minutes (cron, or a second container):
+
+```bash
+cognospay-engine reconcile --factory myapp.payments:build_engine --loop 300
+```
+where `build_engine()` returns `(engine, SessionLocal)`.
+
+**Try it with no credentials:** `python examples/simulate.py` walks link → STK → callback → payout → replay
+against a simulated Safaricom. `examples/fastapi_app.py` is a complete HTTP integration, and
+[`examples/flet_dashboard`](examples/flet_dashboard) is an interactive **Flet dashboard** that replays 12 scenarios
+(forged callbacks, timeouts, crashes, ambiguous payouts) against the real engine so you can watch it work:
+`pip install "cognospay-engine[demo]" && python examples/flet_dashboard/app.py`.
+
+## Collect-only mode
+
+Most integrators just want to *be paid*. Omit `payout_resolver` and the engine collects and verifies
+payments, fires your hook, and never attempts a B2B payout (no initiator / security credential needed).
+
+## Configuration
+
+Environment variables read by `DarajaConfig.from_env()` (same names CognosPay uses):
+
+| Variable | Notes |
+|---|---|
+| `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET` | Daraja app credentials |
+| `MPESA_SHORTCODE`, `MPESA_PASSKEY` | STK push (default shortcode is the sandbox `174379`) |
+| `MPESA_ENVIRONMENT` | `sandbox` (default) or `production`; `MPESA_BASE_URL` overrides |
+| `MPESA_CALLBACK_BASE_URL` | **Public https** URL Safaricom can reach |
+| `MPESA_CALLBACK_SECRET` | 24+ random chars; it is the only proof a callback came from Safaricom |
+| `MPESA_INITIATOR_NAME`, `MPESA_SECURITY_CREDENTIAL` | B2B payouts only |
+
+Tunables (fees, throttle, retry spacing, retention…) live on `EngineSettings`; defaults are the values
+CognosPay runs in production. For a Till (Buy Goods) collection set
+`DarajaConfig(stk_transaction_type="CustomerBuyGoodsOnline", party_b=<till>)`.
+
+### Going live checklist
+
+```python
+problems = production_problems(config)        # sandbox URL, test shortcode, empty creds, localhost
+if problems: raise SystemExit("\n".join(problems))  # callback URL, weak callback secret ...
+```
+Also: call `install_callback_redaction()` (the FastAPI adapter does), run the reconciler, wire `Hooks.alert`
+to something a human reads, and confirm the callback URL is reachable from outside your network.
+
+## Integration surface
+
+| You provide | Purpose |
+|---|---|
+| `payout_resolver(session, merchant_id) -> PayoutRoute \| None` | Where a merchant is paid (`till`/`paybill`) and your fee fraction. `None` = no destination yet (recorded, retried once configured). |
+| `Hooks.on_payment_succeeded(session, payment)` | Mark your invoice/order paid. Called once, after `SUCCESS` is committed, before the payout. Errors are logged and never block the payout. |
+| `Hooks.on_payment_failed(session, payment)` | Payment settled as `FAILED` by a callback or the reconciler. |
+| `Hooks.alert(subject, message)` | Anything needing a human: unmatched money, amount mismatch, ambiguous payouts. |
+| `Hooks.heartbeat(now)`, `Hooks.maintenance=[fn(session, now)]` | Proof of life; extra jobs run with each reconciliation. |
+
+Public API on `PaymentEngine`: `create_link`, `get_valid_link`, `pay_link`, `auto_charge_link`,
+`initiate_stk`, `handle_stk_callback`, `handle_b2b_callback`, `retry_disbursement`, `reconcile`.
+Every method takes a SQLAlchemy `Session` and commits its own unit of work. Failures raise
+`EngineError` subclasses that carry an `http_status` and a user-safe message.
+
+> **Hooks run after the commit.** If the process dies between "payment SUCCESS" and your hook, the hook
+> does not re-run. Make your app's state derivable from the `payments` table, or add a `maintenance` job
+> that re-syncs `SUCCESS` payments your side hasn't recorded.
+
+## Data model
+
+Four tables (`payments`, `payment_links`, `disbursements`, `mpesa_callbacks`), all on `cognospay_engine.Base`.
+`merchant_id` is a plain integer tenant key: no foreign key, the engine doesn't own your merchants table.
+Phone numbers are stored in `payments` and in raw callback payloads: apply your own retention/encryption
+policy (resolved inbox rows are purged after 90 days by default). Amounts are `NUMERIC(12,2)` surfaced
+as `float`; STK and B2B move whole shillings only, and the fee rule guarantees `gross == fee + net`.
+
+## Other frameworks
+
+The engine has no web dependency. A callback endpoint is: verify the path secret with
+`engine.verify_callback_secret(secret)` (404 on mismatch), parse the JSON body, run
+`engine.handle_stk_callback(session, body)` **off your event loop** (it makes blocking HTTP calls), and
+reply `{"ResultCode": 0, "ResultDesc": "Accepted"}`, also for malformed bodies, so Safaricom doesn't retry forever.
+
+## Testing your integration
+
+`cognospay_engine.testing` ships `FakeGateway` (scriptable Safaricom, records every call) and
+`stk_callback_body` / `b2b_result_body` (exact Daraja payload shapes). See `tests/` for patterns.
+
+## Limitations
+
+- **Verified:** 157 tests on SQLite with a fake gateway, including race, replay and mutation checks of the
+  safety rules. **Not verified in this repo:** a live Daraja sandbox run, and PostgreSQL (the per-phone
+  advisory lock is Postgres-only code). Run your own sandbox end-to-end before real money.
+- Kenya/M-Pesa only. STK push, STK query and B2B (till/paybill); no C2B registration, B2C, reversals or
+  account balance yet.
+- `merchant_id` is an integer. Payout fee logic is a simple fraction.
+- Sync SQLAlchemy only; use a threadpool from async code (the FastAPI adapter does).
+
+## Origin
+
+Extracted from CognosPay's production payment code. Behaviour is preserved except where
+[CHANGELOG.md](CHANGELOG.md) says otherwise. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the state
+machines; [docs/MIGRATING_COGNOSPAY.md](docs/MIGRATING_COGNOSPAY.md) shows how CognosPay adopts the library.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Security issues: see [SECURITY.md](SECURITY.md).
