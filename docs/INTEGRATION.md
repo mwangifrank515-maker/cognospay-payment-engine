@@ -26,7 +26,7 @@ users, orders, auth and UI. Integration is five small pieces.
 ## 2. Install and create the tables
 
 ```bash
-pip install git+https://github.com/<you>/cognospay-engine.git@v0.1.0
+pip install git+https://github.com/mwangifrank515-maker/cognospay-engine.git@v0.1.0
 ```
 Development: `Base.metadata.create_all(db_engine)`. Production: give Alembic the engine's metadata so the tables
 live in your normal migrations:

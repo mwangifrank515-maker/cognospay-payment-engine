@@ -38,7 +38,7 @@ Daraja's happy path is easy. The engine is the other 90%: what happens when each
 
 ```bash
 pip install "cognospay-engine[fastapi]"        # from PyPI, once published
-pip install "git+https://github.com/<you>/cognospay-engine.git@v0.1.0"   # until then
+pip install "git+https://github.com/mwangifrank515-maker/cognospay-engine.git@v0.1.0"   # until then
 ```
 
 Python 3.10+, SQLAlchemy 2.x. Tested on SQLite; designed for PostgreSQL (see [Limitations](#limitations)).
