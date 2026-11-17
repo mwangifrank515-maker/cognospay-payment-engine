@@ -4,7 +4,7 @@ The **real engine**, a **simulated Safaricom**, an **in-memory database**. No cr
 Pick a scenario, watch the payment travel through the pipeline, and watch the tables change one step at a time.
 
 ```bash
-pip install "cognospay-engine[demo]"            # installs flet 0.86.x
+pip install -e ".[demo]"                        # from the repo root; installs flet 0.86.x
 python examples/flet_dashboard/app.py           # desktop window
 flet run --web examples/flet_dashboard/app.py   # or in a browser (see the note on FastAPI below)
 ```

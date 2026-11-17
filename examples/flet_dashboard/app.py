@@ -1,6 +1,6 @@
 """CognosPay Engine Lab: a Flet dashboard that shows how the payment engine works.
 
-    pip install "cognospay-engine[demo]"
+    pip install -e ".[demo]"          # from the repo root
     python examples/flet_dashboard/app.py            # desktop window
     flet run --web examples/flet_dashboard/app.py    # or in a browser
 

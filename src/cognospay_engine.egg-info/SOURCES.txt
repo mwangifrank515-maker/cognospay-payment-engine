@@ -32,6 +32,7 @@ tests/test_callbacks.py
 tests/test_daraja.py
 tests/test_example_app.py
 tests/test_fastapi_adapter.py
+tests/test_flask_example.py
 tests/test_flet_dashboard.py
 tests/test_payments.py
 tests/test_payouts_and_reconciliation.py

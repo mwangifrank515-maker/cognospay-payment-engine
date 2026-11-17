@@ -84,7 +84,7 @@ where `build_engine()` returns `(engine, SessionLocal)`.
 against a simulated Safaricom. `examples/fastapi_app.py` is a complete HTTP integration, and
 [`examples/flet_dashboard`](examples/flet_dashboard) is an interactive **Flet dashboard** that replays 12 scenarios
 (forged callbacks, timeouts, crashes, ambiguous payouts) against the real engine so you can watch it work:
-`pip install "cognospay-engine[demo]" && python examples/flet_dashboard/app.py`.
+`pip install -e ".[demo]" && python examples/flet_dashboard/app.py   # from the repo root`.
 
 ## Collect-only mode
 
@@ -118,6 +118,8 @@ Also: call `install_callback_redaction()` (the FastAPI adapter does), run the re
 to something a human reads, and confirm the callback URL is reachable from outside your network.
 
 ## Integration surface
+
+> Step-by-step guide for developers: **[docs/INTEGRATION.md](docs/INTEGRATION.md)** (FastAPI, Flask, any framework, go-live checklist).
 
 | You provide | Purpose |
 |---|---|
